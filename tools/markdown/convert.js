@@ -97,14 +97,19 @@ ss.on('opentag', function(node) {
   }
 
   switch (node.name) {
+    case 'listitem':
+    case 'term':
+      textStack.push(text);
+      text = '';
+      break;
     case 'para':
       textStack.push(text);
       text = '';
       break;
     case 'variablelist':
-      log('SKIPPING VARIABLE LIST');
-      pruneCount++;
-      return;
+      textStack.push(text);
+      text = '';
+      break;
     case 'citerefentry':
       inCiteRefEntry = true;
       textStack.push(text);
@@ -122,6 +127,8 @@ ss.on('opentag', function(node) {
     case 'literal':
       no_child = true;
     case 'title':
+    case 'replaceable':
+    case 'command':
       textStack.push(text);
       text = '';
       break;
@@ -165,6 +172,9 @@ ss.on('closetag', function() {
     return;
 
   switch (outg.name) {
+    case 'variablelist':
+      text = textStack.pop() + text + '\n\n';
+      break;
     case 'para':
       text = textStack.pop() + text + '\n\n';
       break;
@@ -178,9 +188,18 @@ ss.on('closetag', function() {
       text = textStack.pop() + text;
       inCiteRefEntry = false;
       break;
+    case 'listitem':
+      // encase in a blockquote I guess
+      text = textStack.pop() + '\n\n> ' + text.replace(/\n/g,' ').replace(/[\t ]+/g,' ') + '\n\n';
+      break;
+    case 'term':
+      text = textStack.pop() + '`' + text + '`';
+      break;
     case 'literal':
+    case 'replaceable':
+    case 'command':
       //log('`' + text + '`');
-      text = textStack.pop() + text;
+      text = textStack.pop() + '`' + text + '`';
       break;
     case 'title':
       log(rep('#', section + 1) + ' ' + text);
