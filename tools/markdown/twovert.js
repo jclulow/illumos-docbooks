@@ -508,6 +508,53 @@ workq.drain = function() {
     }
   }
   printTree(root);
+  log('################### MARKDOWN ###########');
+  log(makeMarkdown(root));
 };
+
+function makeMarkdown(struct) {
+  var hdglvl = 0;
+  var chapnum = 0;
+  function mm(struct) {
+    var doChildren = true;
+    var s = '';
+    if (struct.type === 'chapter')
+      struct.title = 'Chapter ' + (++chapnum) + ': ' + struct.title;
+    // pre
+    switch (struct.type) {
+      case 'section':
+      case 'book':
+      case 'chapter':
+        hdglvl++;
+        s += rep('#', hdglvl) + ' ' + struct.title + '\n\n';
+        break;
+      case 'include':
+        break;
+      case 'text':
+        s += struct.id;
+        break;
+      case 'codeblock':
+        s += '\n    ' + struct.codelines.join('\n    ') + '\n\n';
+        break;
+      default:
+    }
+    if (doChildren) {
+      for (var i = 0; i < struct.children.length; i++) {
+        s += mm(struct.children[i]);
+      }
+    }
+    // post
+    switch (struct.type) {
+      case 'chapter':
+      case 'section':
+        hdglvl--;
+      case 'paragraph':
+        s += '\n\n';
+        break;
+    }
+    return s;
+  }
+  return mm(struct);
+}
 
 //fs.createReadStream(process.argv[2]).pipe(ss);
