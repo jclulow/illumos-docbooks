@@ -390,9 +390,7 @@ function closetag() {
         }
         t.title = t.title.replace(/[\r\n \t]+/g,' ').trim();
       }
-      if (!t.title) {
-        t.title = t.target;
-      }
+      t.title = t.title || t.target;
       t.children = [];
       break;
     case 'manvolnum':
@@ -522,6 +520,16 @@ function makeMarkdown(struct) {
       struct.title = 'Chapter ' + (++chapnum) + ': ' + struct.title;
     // pre
     switch (struct.type) {
+      case 'link':
+        if (struct.scope === 'manpage') {
+          s += ' *' + struct.title + '* ';
+        } else if (struct.scope === 'internet') {
+          s += ' [' + struct.title + '](' + struct.target + ') ';
+        } else { // XXX
+          s += ' [' + struct.title + '](#) ';
+        }
+        doChildren = false;
+        break;
       case 'section':
       case 'book':
       case 'chapter':
