@@ -232,6 +232,10 @@ function opentag(node) {
       case 'para':
         o.type = 'paragraph';
         break;
+      case 'programlisting':
+      case 'screen':
+        o.type = 'codeblock';
+        break;
       case 'term':
         o.extra = 'term';
       case 'title':
@@ -281,6 +285,8 @@ function opentag(node) {
       break;
     case 'varlistentry':
     case 'listentry':
+    case 'screen':
+    case 'programlisting':
     case 'para':
     case 'sect1':
     case 'sect2':
@@ -345,6 +351,21 @@ function closetag() {
           t.children.push(tc);
         }
       }
+      break;
+    case 'screen':
+    case 'programlisting':
+      t = structStack.pop();
+      t.code = '';
+      for (i = 0; i < t.children.length; i++) {
+        tc = t.children[i];
+        if (tc.type === 'text')
+          t.code += tc.id.replace(/\t/g,'  ');
+        else if (tc.type !== 'text')
+          errx(197, t);
+      }
+      t.codelines = t.code.split('\n');
+      t.children = [];
+      console.dir(t);
       break;
     case 'varlistentry':
     case 'listentry':
