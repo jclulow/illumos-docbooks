@@ -126,7 +126,7 @@ var root = {
  * this stack contains a 'frame' for each structural tag
  *  we encounter.  Presently this can be one of:
  *   - chapter
- *   - sect1, sect2, sect 3
+ *   - sect1, sect2, sect3
  *
  * this frame stores various attributes that are collected
  *  as we process a structural element, including:
@@ -192,6 +192,42 @@ function opentag(node) {
       children: []
     };
     switch (node.name) {
+      case 'ulink':
+        o.type = 'link';
+        switch (node.attributes.type) {
+          case 'url':
+          case 'text_url':
+            o.scope = 'internet';
+            o.target = node.attributes.url;
+            break;
+          default:
+            errx(178, node);
+        }
+        break;
+      case 'olink':
+        o.type = 'link';
+        switch (node.attributes.remap) {
+          case 'internal':
+            o.scope = 'thisbook';
+            o.target = node.attributes.targetptr;
+            break;
+          case 'external':
+            o.scope = 'otherbook';
+            o.target = node.attributes.targetdoc;
+            break;
+          default:
+            errx(179, node);
+        }
+        break;
+      case 'manvolnum':
+        o.type = 'manvolnum';
+        break;
+      case 'refentrytitle':
+        o.type = 'refentrytitle';
+        break;
+      case 'citerefentry':
+        o.type = 'citerefentry';
+        break;
       case 'listentry':
       case 'para':
         o.type = 'paragraph';
@@ -246,10 +282,15 @@ function opentag(node) {
     case 'sect3':
     case 'chapter':
     case 'abstract':
+    case 'olink':
+    case 'ulink':
       n = makeStruct(node);
       structStack.peek().children.push(n);
       structStack.push(n);
       break;
+    case 'manvolnum':
+    case 'refentrytitle':
+    case 'citerefentry':
     case 'term':
     case 'title':
       n = makeStruct(node);
@@ -277,6 +318,7 @@ function closetag() {
   if (pruneCount > 0)
     return;
 
+  var t;
   switch (outg.name) {
     case 'variablelist':
       break;
@@ -288,11 +330,40 @@ function closetag() {
     case 'sect3':
     case 'chapter':
     case 'abstract':
-      structStack.pop();
+    case 'olink':
+    case 'ulink':
+      t = structStack.pop();
+      if (!t.title) {
+        t.title = '';
+        for (var i = 0; i < t.children.length; i++) {
+          var tc = t.children[i];
+          if (tc.type === 'text' && tc.id)
+            t.title += tc.id + ' ';
+        }
+        t.title = t.title.replace(/[\r\n \t]+/g,' ').trim();
+      }
+      if (!t.title) {
+        t.title = t.target;
+      }
+      break;
+    case 'manvolnum':
+    case 'refentrytitle':
+      t = structStack.pop();
+      if (t.children.length !== 1)
+        errx(195, t);
+      structStack.peek()[outg.name]= t.children[0].id.replace(/[\n\r\t ]+/g,' ').trim();
+      break;
+    case 'citerefentry':
+      t = structStack.pop();
+      if (!t.manvolnum && !t.refentrytitle)
+        errx(196, t);
+      structStack.peek().scope = 'manpage';
+      structStack.peek().title = t.refentrytitle + '(' + t.manvolnum + ')';
+      structStack.peek().target = t.refentrytitle + '(' + t.manvolnum + ')';
       break;
     case 'term':
     case 'title':
-      var t = structStack.pop();
+      t = structStack.pop();
       if (t.children.length !== 1)
         console.dir(t);
       else
@@ -365,6 +436,9 @@ workq.drain = function() {
         break;
       case 'include':
         log(ind(lvl + 1) + o.type + ' <' + o.filename + '>');
+        break;
+      case 'link':
+        log(ind(lvl + 1) + o.type + ' |' + o.title + '| (' + ins(o.target) + ')');
         break;
       case 'chapter':
       case 'section':
