@@ -525,6 +525,8 @@ function makeMarkdown(struct) {
           s += ' *' + struct.title + '* ';
         } else if (struct.scope === 'internet') {
           s += ' [' + struct.title + '](' + struct.target + ') ';
+        } else if (struct.scope === 'thisbook') {
+          s += ' [' + struct.title + '](#' + struct.target + ') ';
         } else { // XXX
           s += ' [' + struct.title + '](#) ';
         }
@@ -533,8 +535,9 @@ function makeMarkdown(struct) {
       case 'section':
       case 'book':
       case 'chapter':
+        var anch = struct.id ? '<a name="' + struct.id + '"></a>' : '';
         hdglvl++;
-        s += rep('#', hdglvl) + ' ' + struct.title + '\n\n';
+        s += rep('#', hdglvl) + ' ' + anch + struct.title + '\n\n';
         break;
       case 'include':
         break;
