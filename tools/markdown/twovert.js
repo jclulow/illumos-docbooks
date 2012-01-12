@@ -1,35 +1,47 @@
 #!/usr/bin/env node
 
-// hideous monkey patch is GO!
+// hideous array-stack monkey patch is GO!
 Array.prototype.peek = function() {
-  return this[this.length-1]
+  return this[this.length-1];
 };
 
+// global config
 var SAX_STRICT = true;
 var SAX_OPTIONS = {};
 
+// deps
 var fs = require('fs');
 var sax = require('sax');
-var log = console.log;
 var util = require('util');
+var async = require('async');
+var tools = require('./tools');
+
+// short function defs
+var log = console.log;
 var ins = util.inspect;
+var errx = tools.errx;
+var rep = tools.rep;
+var ind = tools.ind;
 
-function errx(code, obj) {
-  log('error: %s', ins(obj));
-  process.exit(code);
-}
 
-function rep(chr, len) {
-  var str = '';
-  while (str.length < len)
-    str += chr;
-  return (str);
-}
-function ind(len) {
-  return rep(' ', len);
-}
+/*
+ * this queue will contain objects that need to be
+ *  'filled out' by processing their respective xml files
+ */
+var workq = async.queue(function(work, callback) {
+  if (work.type !== 'include') {
+    log('I don\'t know what do do with this work:');
+    errx(175, work);
+  }
+  log('  * * * * PROCESS FILE: ' + work.filename);
 
-var lvl = 0;
+  structStack = [work];
+  nodeStack = [];
+
+  var stream = makeSaxStream();
+  stream.on('end', callback);
+  fs.createReadStream(work.filename).pipe(stream);
+}, 1);
 
 function mungeDoctype(dt) {
   var ret = {};
@@ -57,15 +69,36 @@ function mungeDoctype(dt) {
   return ret;
 }
 
-var ss = sax.createStream(SAX_STRICT, SAX_OPTIONS);
+var globalEnts = null;
+function makeSaxStream() {
+  var ss = sax.createStream(SAX_STRICT, SAX_OPTIONS);
+  if (globalEnts === null) {
+    // monkey patch in some extra text entities, but
+    //   also save this entities hash so we can reuse
+    //   it in later parsers.
+    globalEnts = ss._parser.ENTITIES;
+    globalEnts.nbsp = ' ';
+    globalEnts.rsquo = '\'';
+    globalEnts.lsquo = '\'';
+    globalEnts.ndash = '-';
+    globalEnts.ldquo = '"';
+    globalEnts.rdquo = '"';
+  } else {
+    ss._parser.ENTITIES = globalEnts;
+  }
+  ss.on('error', function(err) { errx(10, err); });
+  ss.on('doctype', doctype);
+  ss.on('opentag', opentag);
+  ss.on('closetag', closetag);
+  ss.on('text', handleText);
 
-// monkey patch in some extra text entities
-ss._parser.ENTITIES['nbsp'] = ' ';
-ss._parser.ENTITIES['rsquo'] = '\'';
-ss._parser.ENTITIES['lsquo'] = '\'';
-ss._parser.ENTITIES['ndash'] = '-';
-ss._parser.ENTITIES['ldquo'] = '"';
-ss._parser.ENTITIES['rdquo'] = '"';
+  // XXX
+  text = '';
+  pruneCount = 0;
+  no_child = false;
+
+  return ss;
+}
 
 // error if a tag that should not have children
 //   has children
@@ -74,7 +107,20 @@ var no_child = false;
 var text = '';
 var pruneCount = 0;
 
-var root = null;
+/*
+ * this is the root of a tree of structural frames,
+ *  each with an array of children.  when we encounter
+ *  a directive to include another XML file, we'll
+ *  insert a placeholder object in this tree.  when we
+ *  come back later we can replace the placeholder with
+ *  a parsed copy of all of the tags in the included file.
+ */
+var root = {
+  type: 'include',
+  filename: process.argv[2],
+  children: [],
+  isRoot: true
+};
 
 /*
  * this stack contains a 'frame' for each structural tag
@@ -91,36 +137,6 @@ var root = null;
 var structStack = [];
 
 var nodeStack = [];
-var parserStack = [];
-
-ss.on('error', function(err) { errx(10, err); });
-ss.on('doctype', doctype);
-ss.on('opentag', opentag);
-ss.on('closetag', closetag);
-ss.on('text', handleText);
-
-function includeXMLFile(filename, callback) {
-  log('CREATING NEW PARSER FOR ' + filename);
-
-  var newp = sax.createStream(SAX_STRICT, SAX_OPTIONS);
-  newp._parser.ENTITIES = ss._parser.ENTITIES;
-
-  newp.on('error', function(err) { errx(10, err); });
-  newp.on('doctype', doctype);
-  newp.on('opentag', opentag);
-  newp.on('closetag', closetag);
-  newp.on('text', handleText);
-  newp.on('end', function() {
-    log('PARSER FINISHED FOR ' + filename);
-    ss = parserStack.pop();
-    callback();
-  });
-
-  parserStack.push(ss);
-  ss = newp;
-
-  fs.createReadStream(filename).pipe(ss);
-}
 
 function splitText(txt) {
   var out = [];
@@ -145,8 +161,14 @@ function doctype(dt) {
   for (var k in x) {
     // replace entities that we know about with a directive that
     //  we can locate and process in text nodes...
-    ss._parser.ENTITIES[k] = '%%%INCLUDE:' + x[k].value + '%%%';
+    globalEnts[k] = '%%%INCLUDE:' + x[k].value + '%%%';
   }
+}
+
+var NODE_STACKS = {};
+function RECORD_NODE_STACK() {
+  var s = nodeStackToString();
+  NODE_STACKS[s] = (NODE_STACKS[s] || 0) + 1;
 }
 
 function opentag(node) {
@@ -154,12 +176,13 @@ function opentag(node) {
     errx(35, 'got child of element that should not have child');
 
   nodeStack.push(node);
+  RECORD_NODE_STACK();
   if (pruneCount > 0) {
     pruneCount++;
     return;
   }
 
-  if (root === null && node.name !== 'book') {
+  if (root.children.length === 0 && node.name !== 'book') {
     errx(76, '<book> must be top level tag!');
   }
 
@@ -169,53 +192,81 @@ function opentag(node) {
       children: []
     };
     switch (node.name) {
+      case 'listentry':
+      case 'para':
+        o.type = 'paragraph';
+        break;
+      case 'term':
+        o.extra = 'term';
       case 'title':
-        o.type = 'title'; break;
+        o.type = 'title';
+        break;
       case 'abstract':
-        o.type = 'abstract'; break;
+        o.type = 'abstract';
+        break;
       case 'book':
-        o.type = 'book'; break;
+        o.type = 'book';
+        break;
+      case 'varlistentry':
       case 'sect1':
       case 'sect2':
       case 'sect3':
-        o.type = 'section'; break;
+        o.type = 'section';
+        break;
       case 'chapter':
-        o.type = 'chapter'; break;
+        o.type = 'chapter';
+        break;
       default:
         errx(101, 'unknown node type: ' + node.name);
     }
     return o;
   }
 
+  var n;
   switch (node.name) {
     case 'index':
     case 'bookinfo':
+    case 'indexterm':
       pruneCount++;
       return;
     case 'book':
-      if (root !== null)
+      if (root.children.length > 0)
         errx(77, '<book> should be top level tag ONLY');
-      root = makeStruct(node);
-      structStack.push(root);
+      root.children.push(makeStruct(node));
+      structStack.push(root.children.peek());
       break;
+    case 'variablelist':
+      // have no structural element for these
+      break;
+    case 'varlistentry':
+    case 'listentry':
+    case 'para':
     case 'sect1':
     case 'sect2':
     case 'sect3':
     case 'chapter':
-      var n = makeStruct(node);
+    case 'abstract':
+      n = makeStruct(node);
       structStack.peek().children.push(n);
       structStack.push(n);
       break;
-      break;
+    case 'term':
     case 'title':
-    case 'abstract':
-      var n = makeStruct(node);
+      n = makeStruct(node);
       structStack.push(n);
       break;
     default:
       //if (stack.length)
         log('%s%s', ind(nodeStack.length), node.name);
   }
+}
+
+function nodeStackToString() {
+  var items = [];
+  for (var i = 0; i < nodeStack.length; i++) {
+    items.push(nodeStack[i].name);
+  }
+  return items.join(' -> ');
 }
 
 function closetag() {
@@ -227,18 +278,26 @@ function closetag() {
     return;
 
   switch (outg.name) {
-    case 'chapter':
+    case 'variablelist':
+      break;
+    case 'varlistentry':
+    case 'listentry':
+    case 'para':
     case 'sect1':
     case 'sect2':
     case 'sect3':
+    case 'chapter':
+    case 'abstract':
       structStack.pop();
       break;
+    case 'term':
     case 'title':
       var t = structStack.pop();
       if (t.children.length !== 1)
-        errx(107, t);
-      // this <title> refers to the containing structural element
-      structStack.peek().title = t.children[0].id.replace(/[\n\r\t ]+/g,' ').trim();
+        console.dir(t);
+      else
+        // this <title> refers to the containing structural element
+        structStack.peek().title = t.children[0].id.replace(/[\n\r\t ]+/g,' ').trim();
       //structStack.peek().title = text.replace(/[\n\r\t ]+/g,' ').trim();
       break;
   }
@@ -253,11 +312,14 @@ function handleText(t) {
   for (var i = 0; i < x.length; i++) {
     var xx = x[i];
     if (xx.type === 'include') {
-      structStack.peek().children.push({
+      var tt = {
         type: 'include',
         id: xx.value,
+        filename: xx.value,
         children: []
-      });
+      };
+      structStack.peek().children.push(tt);
+      workq.push(tt); // XXX enqueue for processing
     } else if (xx.type === 'text' && xx.value.trim().length > 0) {
       // XXX should we essentially ditch whitespace here?
       if (!structStack.peek()) continue;
@@ -275,22 +337,46 @@ function handleText(t) {
   }
 }
 
-ss.on('end', function() {
-  log('end');
+workq.push(root);
+
+workq.drain = function() {
+  log('** queue drained');
 /*
   log('==============================');
   log('TEXT OUTPUT:');
   log(text);
   process.exit(0);*/
+
+  /*
+  log('==============================');
+  log('RECORDED NODE STACKS: ');
+  for (var k in NODE_STACKS) {
+    var v = NODE_STACKS[k];
+    log('%d   %s', v, k);
+  }*/
+
   log('==============================');
   log('NODE TREE:');
   var lvl = 0;
   function printTree(o) {
     switch (o.type) {
+      case 'paragraph':
+        log(ind(lvl + 1) + o.type);
+        break;
+      case 'include':
+        log(ind(lvl + 1) + o.type + ' <' + o.filename + '>');
+        break;
+      case 'chapter':
+      case 'section':
       case 'book':
-        log(ind(lvl + 1) + o.type + ' |' + o.title + '| (' + ins(o.id) + ')'); break;
+        log(ind(lvl + 1) + o.type + ' |' + o.title + '| (' + ins(o.id) + ')');
+        break;
+      case 'text':
+        log(ind(lvl + 1) + o.type + ' (' + ins(o.id).substr(0,45) + ')');
+        break;
       default:
-        log(ind(lvl + 1) + o.type + ' (' + ins(o.id) + ')'); break;
+        log(ind(lvl + 1) + o.type + ' (' + ins(o.id) + ')');
+        break;
     }
     for (var i = 0; i < o.children.length; i++) {
       lvl++;
@@ -299,6 +385,6 @@ ss.on('end', function() {
     }
   }
   printTree(root);
-});
+};
 
-fs.createReadStream(process.argv[2]).pipe(ss);
+//fs.createReadStream(process.argv[2]).pipe(ss);
