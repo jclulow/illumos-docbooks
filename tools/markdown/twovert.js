@@ -263,6 +263,7 @@ function opentag(node) {
     case 'index':
     case 'bookinfo':
     case 'indexterm':
+    case 'table':
       pruneCount++;
       return;
     case 'book':
@@ -271,6 +272,10 @@ function opentag(node) {
       root.children.push(makeStruct(node));
       structStack.push(root.children.peek());
       break;
+    case 'command':
+    case 'emphasis':
+    case 'literal':
+    case 'replaceable':
     case 'variablelist':
       // have no structural element for these
       break;
@@ -318,33 +323,56 @@ function closetag() {
   if (pruneCount > 0)
     return;
 
-  var t;
+  var t, i, tc, twork;
   switch (outg.name) {
+    case 'command':
+    case 'emphasis':
+    case 'literal':
+    case 'replaceable':
     case 'variablelist':
+      break;
+    case 'para':
+      t = structStack.pop();
+      twork = t.children;
+      t.children = [];
+      for (i = 0; i < twork.length; i++) {
+        tc = twork[i];
+        if (tc.type === 'text') {
+          tc.id = tc.id.replace(/[\n\r\t ]+/g,' ').trim();
+          if (tc.id)
+            t.children.push(tc);
+        } else {
+          t.children.push(tc);
+        }
+      }
       break;
     case 'varlistentry':
     case 'listentry':
-    case 'para':
     case 'sect1':
     case 'sect2':
     case 'sect3':
     case 'chapter':
     case 'abstract':
+      t = structStack.pop();
+      break;
     case 'olink':
     case 'ulink':
       t = structStack.pop();
       if (!t.title) {
         t.title = '';
-        for (var i = 0; i < t.children.length; i++) {
-          var tc = t.children[i];
+        for (i = 0; i < t.children.length; i++) {
+          tc = t.children[i];
           if (tc.type === 'text' && tc.id)
             t.title += tc.id + ' ';
+          else if (tc.type !== 'text')
+            errx(197, t);
         }
         t.title = t.title.replace(/[\r\n \t]+/g,' ').trim();
       }
       if (!t.title) {
         t.title = t.target;
       }
+      t.children = [];
       break;
     case 'manvolnum':
     case 'refentrytitle':
