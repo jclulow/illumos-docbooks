@@ -256,6 +256,13 @@ function opentag(node) {
       case 'chapter':
         o.type = 'chapter';
         break;
+      case 'tgroup':
+        o.type = 'table';
+        o.rows = [];
+        break;
+      case 'entry':
+        o.type = 'tablecol';
+        break;
       default:
         errx(101, 'unknown node type: ' + node.name);
     }
@@ -267,7 +274,7 @@ function opentag(node) {
     case 'index':
     case 'bookinfo':
     case 'indexterm':
-    case 'table':
+    //case 'table':
       pruneCount++;
       return;
     case 'book':
@@ -281,6 +288,8 @@ function opentag(node) {
     case 'literal':
     case 'replaceable':
     case 'variablelist':
+    case 'row':
+    case 'thead':
       // have no structural element for these
       break;
     case 'varlistentry':
@@ -295,6 +304,8 @@ function opentag(node) {
     case 'abstract':
     case 'olink':
     case 'ulink':
+    case 'tgroup':
+    case 'entry':
       n = makeStruct(node);
       structStack.peek().children.push(n);
       structStack.push(n);
@@ -374,6 +385,8 @@ function closetag() {
     case 'sect3':
     case 'chapter':
     case 'abstract':
+    case 'tgroup':
+    case 'entry':
       t = structStack.pop();
       break;
     case 'olink':
@@ -417,6 +430,15 @@ function closetag() {
         // this <title> refers to the containing structural element
         structStack.peek().title = t.children[0].id.replace(/[\n\r\t ]+/g,' ').trim();
       //structStack.peek().title = text.replace(/[\n\r\t ]+/g,' ').trim();
+      break;
+    case 'row':
+      t = structStack.peek(); // get this entry
+      if (t.type !== 'table') {
+        console.log('ERROR: expected TABLE found ' + t.type);
+        process.exit(1);
+      }
+      t.rows.push(t.children);
+      t.children = [];
       break;
   }
   no_child = false;
@@ -478,6 +500,19 @@ workq.drain = function() {
   var lvl = 0;
   function printTree(o) {
     switch (o.type) {
+      case 'table':
+        log(ind(lvl + 1) + o.type);
+        for (var j = 0; j < o.rows.length; j++) {
+          var row = o.rows[j];
+          log(ind(lvl + 2) + '--- row ----');
+          for (var k = 0; k < row.length; k++) {
+            log(ind(lvl + 3) + '--- entry ----');
+            lvl += 4;
+            printTree(row[k]);
+            lvl -= 4;
+          }
+        }
+        break;
       case 'paragraph':
         log(ind(lvl + 1) + o.type);
         break;
@@ -531,6 +566,17 @@ function makeMarkdown(struct) {
           s += ' [' + struct.title + '](#) ';
         }
         doChildren = false;
+        break;
+      case 'table':
+	s += '\n{|\n';
+        for (var i = 0; i < struct.rows.length; i++) {
+          var row = struct.rows[i];
+          s += '|-\n';
+          for (var j = 0; j < row.length; j++) {
+            s += '| \n' + mm(row[j]);
+          }
+        }
+        s += '|}\n\n';
         break;
       case 'section':
       case 'book':
